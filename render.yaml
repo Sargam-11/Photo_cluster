@@ -1,0 +1,36 @@
+services:
+  # FastAPI Backend Service
+  - type: web
+    name: photo-gallery-backend
+    runtime: python3
+    buildCommand: pip install -r backend/requirements.txt
+    startCommand: cd backend && uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: photo-gallery-db
+          property: connectionString
+      - key: CORS_ORIGINS
+        value: https://photo-gallery-frontend.onrender.com
+      - key: API_HOST
+        value: 0.0.0.0
+      - key: API_PORT
+        value: 10000
+      - key: FACE_DETECTION_MODEL
+        value: hog
+      - key: CLUSTERING_EPS
+        value: 0.4
+      - key: CLUSTERING_MIN_SAMPLES
+        value: 2
+      - key: UPLOAD_DIR
+        value: ./uploads
+      - key: MAX_UPLOAD_SIZE
+        value: 50MB
+      - key: ALLOWED_EXTENSIONS
+        value: jpg,jpeg,png,heic
+
+# PostgreSQL Database
+databases:
+  - name: photo-gallery-db
+    databaseName: photo_gallery
+    user: photo_gallery_user
