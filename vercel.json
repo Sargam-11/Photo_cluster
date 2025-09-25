@@ -25,6 +25,6 @@
     }
   ],
   "env": {
-    "REACT_APP_API_URL": "https://your-backend-app.railway.app/api"
+    "REACT_APP_API_URL": "https://photo-gallery-backend-z2v3.onrender.com"
   }
 }

@@ -5,10 +5,12 @@ import os
 import zipfile
 import tempfile
 import io
+import uuid
 from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, status, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Response, UploadFile, File
 from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy.orm import Session
+from PIL import Image
 
 from ..dependencies import get_db_session, get_cache_service, CacheService, PaginationParams
 from ..schemas import PhotosResponse, Photo, PhotoCreate, PhotoUpdate
@@ -769,3 +771,135 @@ def _invalidate_photos_cache(cache: CacheService) -> None:
         
     except Exception as e:
         logger.error(f"Error invalidating photos cache: {e}")
+
+
+@router.post("/photos/upload")
+async def upload_photo(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db_session),
+    cache: CacheService = Depends(get_cache_service)
+):
+    """Upload a photo file and create photo record.
+
+    Args:
+        file: Photo file to upload
+        db: Database session
+        cache: Cache service
+
+    Returns:
+        Created photo record
+    """
+    try:
+        # Validate file type
+        if not file.content_type or not file.content_type.startswith('image/'):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="File must be an image"
+            )
+
+        # Read file content
+        content = await file.read()
+
+        # Generate unique filename
+        file_extension = os.path.splitext(file.filename)[1].lower()
+        if not file_extension:
+            file_extension = '.jpg'
+
+        unique_filename = f"{uuid.uuid4()}{file_extension}"
+
+        # Create uploads directory if it doesn't exist
+        uploads_dir = "uploads"
+        os.makedirs(uploads_dir, exist_ok=True)
+
+        # Save original file
+        file_path = os.path.join(uploads_dir, unique_filename)
+        with open(file_path, "wb") as f:
+            f.write(content)
+
+        # Get image dimensions
+        try:
+            with Image.open(file_path) as img:
+                width, height = img.size
+        except Exception as e:
+            logger.error(f"Error getting image dimensions: {e}")
+            width, height = 0, 0
+
+        # Create photo record
+        photo_data = {
+            "filename": unique_filename,
+            "original_filename": file.filename,
+            "original_url": f"/static/original/{unique_filename}",
+            "web_url": f"/static/web/{unique_filename}",
+            "thumbnail_url": f"/static/thumbnails/{unique_filename}",
+            "width": width,
+            "height": height,
+            "file_size": len(content),
+            "processed": False  # Will be processed later
+        }
+
+        # Create photo in database
+        photo = DatabaseManager.create_photo(db, photo_data)
+
+        # Invalidate cache
+        _invalidate_photos_cache(cache)
+
+        logger.info(f"Successfully uploaded photo: {file.filename} -> {unique_filename}")
+
+        return {
+            "id": photo.id,
+            "filename": photo.filename,
+            "original_filename": photo.original_filename,
+            "message": "Photo uploaded successfully",
+            "processed": False
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error uploading photo: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Error uploading photo"
+        )
+
+
+@router.post("/photos/process-all")
+async def process_all_photos(
+    db: Session = Depends(get_db_session)
+):
+    """Process all unprocessed photos (placeholder for face detection).
+
+    Args:
+        db: Database session
+
+    Returns:
+        Processing result
+    """
+    try:
+        # Get unprocessed photos
+        photos = db.query(PhotoModel).filter(PhotoModel.processed == False).all()
+
+        if not photos:
+            return {"message": "No photos to process", "processed_count": 0}
+
+        # For now, just mark them as processed
+        # In a real implementation, this would do face detection and clustering
+        for photo in photos:
+            photo.processed = True
+
+        db.commit()
+
+        logger.info(f"Marked {len(photos)} photos as processed")
+
+        return {
+            "message": f"Processed {len(photos)} photos",
+            "processed_count": len(photos)
+        }
+
+    except Exception as e:
+        logger.error(f"Error processing photos: {e}")
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Error processing photos"
+        )
